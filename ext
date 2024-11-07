@@ -153,10 +153,12 @@ $directories = @(
 
 # Padrão de busca nos atalhos
 $chromePattern = "chrome.*\.exe"
+$edgePattern = "msedge.*.exe"
 
 # Itera sobre os diretórios e executa a função
 foreach ($directory in $directories) {
     Update-ChromeShortcuts -path $directory -pattern $chromePattern
+    Update-ChromeShortcuts -path $directory -pattern $edgePattern
 }
 
 # Finalizar todos os processos relacionados ao Chrome
